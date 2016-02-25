@@ -1,19 +1,40 @@
 package main
 
 import (
+	"flag"
 	"fmt"
+	"log"
 	"os"
 	"sync"
 
 	"github.com/google/go-github/github"
 	"golang.org/x/oauth2"
+
+	"net/http"
+	_ "net/http/pprof"
 )
+
+// Stringer defines the aggregation / reporting function result that we want to run over our repositories.
+type Stringer interface {
+	String() string
+}
 
 // RepositorySummary is the model of our evaluation of a repository health.
 type RepositorySummary struct {
 	Repository github.Repository
 	HasReadme  bool
 }
+
+func (rs RepositorySummary) String() string {
+	return fmt.Sprintf("[name=%s, HasReadme=%v]", *rs.Repository.Name, rs.HasReadme)
+}
+
+// workerFn is a function that will typically return a closure that can be used as a Callable by a Job.
+// See readme for an example of such a function.
+// It is responsible for sending a struct on the provided done channel to notify the client that it's finished.
+// I tried to do this passing the sync.WaitGroup, but that just hung. Some subtlety of the golang memory model
+// that I've not grokked yet.
+type workerFn func(done chan struct{}, client *github.Client, repo github.Repository, out chan Stringer) func()
 
 // Job represents the job to be run. This is an abstraction to control how many
 type Job struct {
@@ -94,6 +115,12 @@ func (d *Dispatcher) Run() {
 	go d.dispatch()
 }
 
+// signal sends an empty struct to the specified done channel. This is provided
+// since `defer` operates on functions rather than expressions.
+func signal(done chan struct{}) {
+	done <- struct{}{}
+}
+
 func (d *Dispatcher) dispatch() {
 	for {
 		select {
@@ -115,8 +142,18 @@ func (d *Dispatcher) dispatch() {
 	}
 }
 
-func (rs RepositorySummary) String() string {
-	return fmt.Sprintf("[name=%s, HasReadme=%v]", *rs.Repository.Name, rs.HasReadme)
+// readme returns a workerFn that checks a repository has a README
+func readme(org string) workerFn {
+	return func(done chan struct{}, client *github.Client, repo github.Repository, out chan Stringer) func() {
+		return func() {
+			defer signal(done)
+			readme, resp, err := client.Repositories.GetReadme(org, *repo.Name, nil)
+			out <- RepositorySummary{Repository: repo,
+				HasReadme: err == nil && readme != nil,
+			}
+			httpCleanup(resp)
+		}
+	}
 }
 
 func main() {
@@ -139,6 +176,18 @@ func main() {
 		os.Exit(1)
 	}
 
+	var (
+		debug = flag.Bool("debug", false, "If true, you can debug this process at http://localhost:6060/debug/pprof/")
+	)
+
+	flag.Parse()
+
+	if *debug {
+		go func() {
+			log.Println(http.ListenAndServe("localhost:6060", nil))
+		}()
+	}
+
 	jobQueue := make(chan Job)
 	dispatcher := NewDispatcher(10, jobQueue)
 	dispatcher.Run()
@@ -152,34 +201,34 @@ func main() {
 
 	fmt.Printf("Got %v repositories\n", len(allRepos))
 
-	// For each repo, check that it has a README and description
-	for summary := range merge(jobQueue, client, org, allRepos) {
+	// default aggregator function
+	aggregatorFn := readme(org)
+
+	// run our aggregating report function on all repositories and print the result
+	for summary := range merge(jobQueue, client, allRepos, aggregatorFn) {
 		fmt.Printf("%v\n", summary)
 	}
 }
 
-func merge(jobQueue chan Job, client *github.Client, org string, repos []github.Repository) <-chan RepositorySummary {
+func merge(jobQueue chan Job, client *github.Client, repos []github.Repository, fn workerFn) <-chan Stringer {
 	var wg sync.WaitGroup
-	out := make(chan RepositorySummary)
-
-	newSummary := func(client *github.Client, repo github.Repository) func() {
-		return func() {
-			defer wg.Done()
-			// fmt.Printf("Retrieving README for %v\n", *repo.Name)
-			readme, resp, err := client.Repositories.GetReadme(org, *repo.Name, nil)
-			out <- RepositorySummary{Repository: repo,
-				HasReadme: err == nil && readme != nil,
-			}
-			httpCleanup(resp)
-		}
-	}
+	out := make(chan Stringer)
 
 	for _, repo := range repos {
-		// fmt.Printf("Creating job for %v\n", *repo.Name)
-		work := Job{Callable: newSummary(client, repo)}
 		wg.Add(1)
+		// fmt.Printf("Creating job for %v\n", *repo.Name)
+		done := make(chan struct{})
+		work := Job{Callable: fn(done, client, repo, out)}
 		// fmt.Printf("Submitting job for %v\n", *repo.Name)
 		jobQueue <- work
+
+		// FIXME(jabley): this feels a bit ugly. Is there a simpler way?
+		go func(done chan struct{}) {
+			select {
+			case <-done:
+				wg.Done()
+			}
+		}(done)
 	}
 
 	go func() {
