@@ -150,28 +150,15 @@ func main() {
 		return
 	}
 
-	// fmt.Printf("Got %v repositories\n", len(allRepos))
-
-	in := repoChannel(allRepos)
+	fmt.Printf("Got %v repositories\n", len(allRepos))
 
 	// For each repo, check that it has a README and description
-	for summary := range merge(jobQueue, client, org, in) {
+	for summary := range merge(jobQueue, client, org, allRepos) {
 		fmt.Printf("%v\n", summary)
 	}
 }
 
-func repoChannel(repos []github.Repository) <-chan github.Repository {
-	out := make(chan github.Repository)
-	go func() {
-		for _, repo := range repos {
-			out <- repo
-		}
-		close(out)
-	}()
-	return out
-}
-
-func merge(jobQueue chan Job, client *github.Client, org string, repos <-chan github.Repository) <-chan RepositorySummary {
+func merge(jobQueue chan Job, client *github.Client, org string, repos []github.Repository) <-chan RepositorySummary {
 	var wg sync.WaitGroup
 	out := make(chan RepositorySummary)
 
@@ -187,7 +174,7 @@ func merge(jobQueue chan Job, client *github.Client, org string, repos <-chan gi
 		}
 	}
 
-	for repo := range repos {
+	for _, repo := range repos {
 		// fmt.Printf("Creating job for %v\n", *repo.Name)
 		work := Job{Callable: newSummary(client, repo)}
 		wg.Add(1)
