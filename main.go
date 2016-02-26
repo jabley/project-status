@@ -29,6 +29,22 @@ func (rs RepositorySummary) String() string {
 	return fmt.Sprintf("[name=%s, HasReadme=%v]", *rs.Repository.Name, rs.HasReadme)
 }
 
+// EmptyRepository defines a Stringer that indicates whether a repository is empty or not.
+// This is useful for finding repositories that have been created, but not actually committed to.
+// Yes, really.
+type EmptyRepository struct {
+	Repository github.Repository
+}
+
+func (er EmptyRepository) String() string {
+	return fmt.Sprintf("[name=%s, PushedAt=%v, CreatedAt:=%v, Size=%v]",
+		*er.Repository.Name,
+		er.Repository.PushedAt,
+		er.Repository.CreatedAt,
+		*er.Repository.Size,
+	)
+}
+
 // workerFn is a function that will typically return a closure that can be used as a Callable by a Job.
 // See readme for an example of such a function.
 // It is responsible for sending a struct on the provided done channel to notify the client that it's finished.
@@ -156,6 +172,18 @@ func readme(org string) workerFn {
 	}
 }
 
+// emptyRepos returns a workerFn that checks whether a repository has had any commits.
+func emptyRepos(org string) workerFn {
+	return func(done chan struct{}, client *github.Client, repo github.Repository, out chan Stringer) func() {
+		return func() {
+			defer signal(done)
+			if *repo.PushedAt == *repo.CreatedAt {
+				out <- EmptyRepository{Repository: repo}
+			}
+		}
+	}
+}
+
 func main() {
 	oauthToken := os.Getenv("GH_OAUTH_TOKEN")
 
@@ -178,6 +206,7 @@ func main() {
 
 	var (
 		debug = flag.Bool("debug", false, "If true, you can debug this process at http://localhost:6060/debug/pprof/")
+		empty = flag.Bool("empty", false, "If true, will check for empty repositories")
 	)
 
 	flag.Parse()
@@ -203,6 +232,10 @@ func main() {
 
 	// default aggregator function
 	aggregatorFn := readme(org)
+
+	if *empty {
+		aggregatorFn = emptyRepos(org)
+	}
 
 	// run our aggregating report function on all repositories and print the result
 	for summary := range merge(jobQueue, client, allRepos, aggregatorFn) {
