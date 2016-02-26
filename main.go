@@ -14,11 +14,6 @@ import (
 	_ "net/http/pprof"
 )
 
-// Stringer defines the aggregation / reporting function result that we want to run over our repositories.
-type Stringer interface {
-	String() string
-}
-
 // RepositorySummary is the model of our evaluation of a repository health.
 type RepositorySummary struct {
 	Repository github.Repository
@@ -50,7 +45,7 @@ func (er EmptyRepository) String() string {
 // It is responsible for sending a struct on the provided done channel to notify the client that it's finished.
 // I tried to do this passing the sync.WaitGroup, but that just hung. Some subtlety of the golang memory model
 // that I've not grokked yet.
-type workerFn func(done chan struct{}, client *github.Client, repo github.Repository, out chan Stringer) func()
+type workerFn func(done chan struct{}, client *github.Client, repo github.Repository, out chan fmt.Stringer) func()
 
 // Job represents the job to be run. This is an abstraction to control how many
 type Job struct {
@@ -160,7 +155,7 @@ func (d *Dispatcher) dispatch() {
 
 // readme returns a workerFn that checks a repository has a README
 func readme(org string) workerFn {
-	return func(done chan struct{}, client *github.Client, repo github.Repository, out chan Stringer) func() {
+	return func(done chan struct{}, client *github.Client, repo github.Repository, out chan fmt.Stringer) func() {
 		return func() {
 			defer signal(done)
 			readme, resp, err := client.Repositories.GetReadme(org, *repo.Name, nil)
@@ -174,7 +169,7 @@ func readme(org string) workerFn {
 
 // emptyRepos returns a workerFn that checks whether a repository has had any commits.
 func emptyRepos(org string) workerFn {
-	return func(done chan struct{}, client *github.Client, repo github.Repository, out chan Stringer) func() {
+	return func(done chan struct{}, client *github.Client, repo github.Repository, out chan fmt.Stringer) func() {
 		return func() {
 			defer signal(done)
 			if *repo.PushedAt == *repo.CreatedAt {
@@ -243,9 +238,9 @@ func main() {
 	}
 }
 
-func merge(jobQueue chan Job, client *github.Client, repos []github.Repository, fn workerFn) <-chan Stringer {
+func merge(jobQueue chan Job, client *github.Client, repos []github.Repository, fn workerFn) <-chan fmt.Stringer {
 	var wg sync.WaitGroup
-	out := make(chan Stringer)
+	out := make(chan fmt.Stringer)
 
 	for _, repo := range repos {
 		wg.Add(1)
