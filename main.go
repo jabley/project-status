@@ -14,6 +14,18 @@ import (
 	_ "net/http/pprof"
 )
 
+const usage = `
+GH_ORG=MyOrgOrUser GH_OAUTH_TOKEN=MyToken project-status [-help] [-empty] [-debug]
+
+By default, project-status will check that all repositories have a README.
+
+You can choose other behaviour:
+
+-empty	check for empty repositories
+-debug	debug this process at http://localhost:6060/debug/pprof/
+-help	show this help message
+`
+
 // RepositorySummary is the model of our evaluation of a repository health.
 type RepositorySummary struct {
 	Repository github.Repository
@@ -202,9 +214,15 @@ func main() {
 	var (
 		debug = flag.Bool("debug", false, "If true, you can debug this process at http://localhost:6060/debug/pprof/")
 		empty = flag.Bool("empty", false, "If true, will check for empty repositories")
+		help  = flag.Bool("help", false, "If true, display the usage message and exit")
 	)
 
 	flag.Parse()
+
+	if *help {
+		showUsage()
+		os.Exit(2)
+	}
 
 	if *debug {
 		go func() {
@@ -219,8 +237,8 @@ func main() {
 	allRepos, err := getAllRepos(client, org)
 
 	if err != nil {
-		fmt.Printf("%v\n", err)
-		return
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		os.Exit(3)
 	}
 
 	fmt.Printf("Got %v repositories\n", len(allRepos))
@@ -236,6 +254,10 @@ func main() {
 	for summary := range merge(jobQueue, client, allRepos, aggregatorFn) {
 		fmt.Printf("%v\n", summary)
 	}
+}
+
+func showUsage() {
+	fmt.Fprintf(os.Stderr, usage)
 }
 
 func merge(jobQueue chan Job, client *github.Client, repos []github.Repository, fn workerFn) <-chan fmt.Stringer {
