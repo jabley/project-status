@@ -195,6 +195,7 @@ func main() {
 	oauthToken := os.Getenv("GH_OAUTH_TOKEN")
 
 	if oauthToken == "" {
+		showUsage()
 		os.Exit(1)
 	}
 
@@ -208,6 +209,7 @@ func main() {
 	org := os.Getenv("GH_ORG")
 
 	if org == "" {
+		showUsage()
 		os.Exit(1)
 	}
 
