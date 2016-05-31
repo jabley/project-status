@@ -20,10 +20,6 @@ GH_ORG=MyOrgOrUser GH_OAUTH_TOKEN=MyToken project-status [-help] [-empty] [-debu
 By default, project-status will check that all repositories have a README.
 
 You can choose other behaviour:
-
--empty	check for empty repositories
--debug	debug this process at http://localhost:6060/debug/pprof/
--help	show this help message
 `
 
 // RepositorySummary is the model of our evaluation of a repository health.
@@ -191,7 +187,34 @@ func emptyRepos(org string) workerFn {
 	}
 }
 
+const (
+	debugUsage   = "debug this process at http://localhost:6060/debug/pprof/"
+	debugDefault = false
+
+	emptyUsage   = "check for empty repositories"
+	emptyDefault = false
+
+	helpUsage   = "display the usage message and exit"
+	helpDefault = false
+)
+
 func main() {
+	var (
+		debug, empty, help bool
+	)
+
+	flag.BoolVar(&debug, "debug", debugDefault, debugUsage)
+	flag.BoolVar(&debug, "d", debugDefault, debugUsage)
+	flag.BoolVar(&empty, "empty", emptyDefault, emptyUsage)
+	flag.BoolVar(&empty, "e", emptyDefault, emptyUsage)
+	flag.BoolVar(&help, "help", helpDefault, helpUsage)
+	flag.BoolVar(&help, "h", helpDefault, helpUsage)
+
+	flag.Usage = func() {
+		fmt.Fprintf(os.Stderr, usage)
+		flag.PrintDefaults()
+	}
+
 	oauthToken := os.Getenv("GH_OAUTH_TOKEN")
 
 	if oauthToken == "" {
@@ -213,20 +236,14 @@ func main() {
 		os.Exit(1)
 	}
 
-	var (
-		debug = flag.Bool("debug", false, "If true, you can debug this process at http://localhost:6060/debug/pprof/")
-		empty = flag.Bool("empty", false, "If true, will check for empty repositories")
-		help  = flag.Bool("help", false, "If true, display the usage message and exit")
-	)
-
 	flag.Parse()
 
-	if *help {
+	if help {
 		showUsage()
 		os.Exit(2)
 	}
 
-	if *debug {
+	if debug {
 		go func() {
 			log.Println(http.ListenAndServe("localhost:6060", nil))
 		}()
@@ -248,7 +265,7 @@ func main() {
 	// default aggregator function
 	aggregatorFn := readme(org)
 
-	if *empty {
+	if empty {
 		aggregatorFn = emptyRepos(org)
 	}
 
@@ -259,7 +276,7 @@ func main() {
 }
 
 func showUsage() {
-	fmt.Fprintf(os.Stderr, usage)
+	flag.Usage()
 }
 
 func merge(jobQueue chan Job, client *github.Client, repos []github.Repository, fn workerFn) <-chan fmt.Stringer {
